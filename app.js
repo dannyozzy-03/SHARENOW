@@ -85,27 +85,51 @@ function formatPrivateKey(key) {
 try {
     let firebaseConfig;
     
-    // For Render deployment, prioritize service account file which is more reliable
-    // than environment variables for private keys
     console.log('🔥 Initializing Firebase...');
     console.log('📍 Environment:', process.env.NODE_ENV || 'development');
     
-    try {
-        // First, try service account file (most reliable)
-        console.log('🔧 Attempting service account file method...');
+    // Prefer environment variables in production for security
+    if (process.env.NODE_ENV === 'production' && process.env.FIREBASE_PROJECT_ID) {
+        console.log('🔧 Using environment variables for production deployment...');
+        console.log('📋 Project ID:', process.env.FIREBASE_PROJECT_ID);
+        console.log('📧 Client Email:', process.env.FIREBASE_CLIENT_EMAIL);
+        console.log('🔑 Private Key Length:', process.env.FIREBASE_PRIVATE_KEY ? process.env.FIREBASE_PRIVATE_KEY.length : 0);
+        
+        const formattedPrivateKey = formatPrivateKey(process.env.FIREBASE_PRIVATE_KEY);
+        console.log('🔧 Formatted Private Key Length:', formattedPrivateKey ? formattedPrivateKey.length : 0);
+        
+        if (!formattedPrivateKey || formattedPrivateKey.length < 500) {
+            throw new Error(`Invalid private key: too short (${formattedPrivateKey ? formattedPrivateKey.length : 0} chars). Expected 1600+ chars.`);
+        }
+        
         firebaseConfig = {
-            credential: admin.credential.cert(require("./serviceAccountKey.json"))
+            credential: admin.credential.cert({
+                projectId: process.env.FIREBASE_PROJECT_ID,
+                clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+                privateKey: formattedPrivateKey
+            })
         };
         
         admin.initializeApp(firebaseConfig);
-        console.log("✅ Firebase initialized successfully with service account file");
+        console.log("✅ Firebase initialized successfully with environment variables");
         
-    } catch (serviceAccountError) {
-        console.log('❌ Service account file failed, trying environment variables...');
-        console.log('Service account error:', serviceAccountError.message);
-        
-        // Fallback to environment variables if service account file fails
-        if (process.env.NODE_ENV === 'production' && process.env.FIREBASE_PROJECT_ID) {
+    } else {
+        // Fallback to service account file for development
+        try {
+            console.log('🔧 Attempting service account file method for development...');
+            firebaseConfig = {
+                credential: admin.credential.cert(require("./serviceAccountKey.json"))
+            };
+            
+            admin.initializeApp(firebaseConfig);
+            console.log("✅ Firebase initialized successfully with service account file");
+            
+        } catch (serviceAccountError) {
+            console.log('❌ Service account file failed, trying environment variables...');
+            console.log('Service account error:', serviceAccountError.message);
+            
+            // Final fallback to environment variables
+            if (process.env.FIREBASE_PROJECT_ID) {
             console.log('🔧 Attempting environment variables method...');
             console.log('📋 Project ID:', process.env.FIREBASE_PROJECT_ID);
             console.log('📧 Client Email:', process.env.FIREBASE_CLIENT_EMAIL);
@@ -130,6 +154,7 @@ try {
             console.log("✅ Firebase initialized successfully with environment variables");
         } else {
             throw new Error('Neither service account file nor environment variables are available');
+        }
         }
     }
     
