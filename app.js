@@ -329,29 +329,68 @@ async function handleClassNotification(notificationDoc) {
     }
 }
 
-// Notification listener
-firestore.collection('notifications').onSnapshot((snapshot) => {
-    snapshot.docChanges().forEach(async (change) => {
-        if (change.type === 'added') {
-            try {
-                await handleClassNotification(change.doc);
-            } catch (error) {
-                console.error('Error processing notification:', error);
-            }
+// Notification listener with error handling
+let notificationListener = null;
+
+function startNotificationListener() {
+    try {
+        if (notificationListener) {
+            notificationListener();
         }
-    });
-});
+        
+        console.log('🔔 Starting notification listener...');
+        
+        notificationListener = firestore.collection('notifications').onSnapshot(
+            (snapshot) => {
+                snapshot.docChanges().forEach(async (change) => {
+                    if (change.type === 'added') {
+                        try {
+                            await handleClassNotification(change.doc);
+                        } catch (error) {
+                            console.error('Error processing notification:', error);
+                        }
+                    }
+                });
+            },
+            (error) => {
+                console.error('🔔 Notification listener error:', error);
+                console.log('🔄 Retrying notification listener in 30 seconds...');
+                
+                setTimeout(() => {
+                    startNotificationListener();
+                }, 30000);
+            }
+        );
+        
+        console.log('✅ Notification listener started successfully');
+        
+    } catch (error) {
+        console.error('🔔 Failed to start notification listener:', error);
+        setTimeout(() => {
+            startNotificationListener();
+        }, 60000);
+    }
+}
+
+// Start the notification listener
+startNotificationListener();
 
 // Server-Sent Events endpoint
 app.get("/events", async (req, res) => {
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Headers", "Cache-Control");
 
     const postsCollection = firestore.collection("admin_posts");
+    let unsubscribe = null;
+
+    console.log('📡 New SSE connection established');
 
     try {
-        const snapshot = await postsCollection.orderBy("timestamp", "desc").get();
+        // Send initial posts
+        const snapshot = await postsCollection.orderBy("timestamp", "desc").limit(10).get();
         if (!snapshot.empty) {
             snapshot.docs.forEach((doc) => {
                 const data = doc.data();
@@ -365,31 +404,77 @@ app.get("/events", async (req, res) => {
             });
             lastSentPostId = snapshot.docs[0].id; 
         }
+        
+        // Send keep-alive message
+        res.write(`event: heartbeat\ndata: ${JSON.stringify({status: "connected"})}\n\n`);
+        
     } catch (error) {
-        console.error("Error fetching initial posts:", error);
+        console.error("📡 Error fetching initial posts:", error);
+        res.write(`data: ${JSON.stringify({error: "Failed to load initial posts"})}\n\n`);
     }
 
-    const unsubscribe = postsCollection.orderBy("timestamp", "desc").limit(1).onSnapshot((snapshot) => {
-        if (snapshot.empty) return;
+    // Set up real-time listener with error handling
+    try {
+        unsubscribe = postsCollection.orderBy("timestamp", "desc").limit(1).onSnapshot(
+            (snapshot) => {
+                if (snapshot.empty) return;
 
-        const latestDoc = snapshot.docs[0];
-        if (lastSentPostId === latestDoc.id) return; 
+                const latestDoc = snapshot.docs[0];
+                if (lastSentPostId === latestDoc.id) return; 
 
-        lastSentPostId = latestDoc.id;
-        const latestPost = latestDoc.data();
+                lastSentPostId = latestDoc.id;
+                const latestPost = latestDoc.data();
+                
+                const eventData = JSON.stringify({
+                    message: latestPost.text,
+                    adminEmail: latestPost.email,
+                    timestamp: latestPost.timestamp ? latestPost.timestamp.toDate().toISOString() : new Date().toISOString(),
+                    imageUrl: latestPost.imageUrl || null,
+                    category: latestPost.category || "General"
+                });
+                
+                res.write(`data: ${eventData}\n\n`);
+                console.log('📡 New admin post sent via SSE');
+            },
+            (error) => {
+                console.error("📡 SSE Firestore listener error:", error);
+                res.write(`data: ${JSON.stringify({error: "Connection lost, please refresh"})}\n\n`);
+            }
+        );
         
-        res.write(`data: ${JSON.stringify({
-            message: latestPost.text,
-            adminEmail: latestPost.email,
-            timestamp: latestPost.timestamp ? latestPost.timestamp.toDate().toISOString() : new Date().toISOString(),
-            imageUrl: latestPost.imageUrl || null,
-            category: latestPost.category || "General"
-        })}\n\n`);
-    });
+    } catch (error) {
+        console.error("📡 Error setting up SSE listener:", error);
+        res.write(`data: ${JSON.stringify({error: "Failed to setup real-time updates"})}\n\n`);
+    }
 
+    // Handle client disconnect
     req.on("close", () => {
-        unsubscribe();
+        console.log('📡 SSE connection closed');
+        if (unsubscribe) {
+            unsubscribe();
+        }
         res.end();
+    });
+    
+    req.on("error", (error) => {
+        console.error('📡 SSE connection error:', error);
+        if (unsubscribe) {
+            unsubscribe();
+        }
+        res.end();
+    });
+    
+    // Send periodic heartbeat
+    const heartbeatInterval = setInterval(() => {
+        if (res.writableEnded) {
+            clearInterval(heartbeatInterval);
+            return;
+        }
+        res.write(`event: heartbeat\ndata: ${JSON.stringify({status: "alive"})}\n\n`);
+    }, 30000);
+    
+    req.on("close", () => {
+        clearInterval(heartbeatInterval);
     });
 });
 
@@ -440,6 +525,60 @@ app.get("/", (req, res) => {
             websocket: "Connect to this same URL with WebSocket"
         }
     });
+});
+
+// Graceful shutdown handling
+process.on('SIGTERM', () => {
+    console.log('🔄 SIGTERM received, shutting down gracefully...');
+    
+    // Close notification listener
+    if (notificationListener) {
+        notificationListener();
+    }
+    
+    // Close WebSocket server
+    wss.close(() => {
+        console.log('📡 WebSocket server closed');
+    });
+    
+    // Close HTTP server
+    server.close(() => {
+        console.log('🚀 HTTP server closed');
+        process.exit(0);
+    });
+});
+
+process.on('SIGINT', () => {
+    console.log('🔄 SIGINT received, shutting down gracefully...');
+    
+    // Close notification listener
+    if (notificationListener) {
+        notificationListener();
+    }
+    
+    // Close WebSocket server
+    wss.close(() => {
+        console.log('📡 WebSocket server closed');
+    });
+    
+    // Close HTTP server
+    server.close(() => {
+        console.log('🚀 HTTP server closed');
+        process.exit(0);
+    });
+});
+
+// Handle unhandled promise rejections (common with Firestore)
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('⚠️ Unhandled Rejection at:', promise, 'reason:', reason);
+    // Don't exit the process, just log the error
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+    console.error('💥 Uncaught Exception:', error);
+    // For uncaught exceptions, we should exit
+    process.exit(1);
 });
 
 // Start server
