@@ -12,6 +12,37 @@ const wss = new WebSocket.Server({ server });
 app.use(cors());
 app.use(express.json());
 
+// Helper function to format private key properly
+function formatPrivateKey(key) {
+    if (!key) return null;
+    
+    // Remove any extra whitespace and quotes
+    let cleanKey = key.trim().replace(/^["']|["']$/g, '');
+    
+    // If the key doesn't start with -----BEGIN, it might be base64 encoded or malformed
+    if (!cleanKey.startsWith('-----BEGIN PRIVATE KEY-----')) {
+        console.log('🔧 Private key doesn\'t start with BEGIN marker, trying to fix...');
+        
+        // Try to add proper headers if missing
+        if (!cleanKey.includes('-----BEGIN PRIVATE KEY-----')) {
+            // If it's just the key content, wrap it properly
+            const keyContent = cleanKey.replace(/-----.*?-----/g, '').replace(/\s/g, '');
+            cleanKey = `-----BEGIN PRIVATE KEY-----\n${keyContent.match(/.{1,64}/g).join('\n')}\n-----END PRIVATE KEY-----`;
+        }
+    }
+    
+    // Ensure proper line breaks
+    cleanKey = cleanKey.replace(/\\n/g, '\n');
+    
+    // Fix common formatting issues
+    cleanKey = cleanKey
+        .replace(/-----BEGIN PRIVATE KEY-----\s*/, '-----BEGIN PRIVATE KEY-----\n')
+        .replace(/\s*-----END PRIVATE KEY-----/, '\n-----END PRIVATE KEY-----')
+        .replace(/\n\n+/g, '\n'); // Remove extra newlines
+    
+    return cleanKey;
+}
+
 // Initialize Firebase Admin
 try {
     let firebaseConfig;
@@ -21,13 +52,21 @@ try {
         console.log('🔥 Initializing Firebase with environment variables');
         console.log('📋 Project ID:', process.env.FIREBASE_PROJECT_ID);
         console.log('📧 Client Email:', process.env.FIREBASE_CLIENT_EMAIL);
-        console.log('🔑 Private Key Length:', process.env.FIREBASE_PRIVATE_KEY ? process.env.FIREBASE_PRIVATE_KEY.length : 0);
+        console.log('🔑 Raw Private Key Length:', process.env.FIREBASE_PRIVATE_KEY ? process.env.FIREBASE_PRIVATE_KEY.length : 0);
+        
+        const formattedPrivateKey = formatPrivateKey(process.env.FIREBASE_PRIVATE_KEY);
+        console.log('🔧 Formatted Private Key Length:', formattedPrivateKey ? formattedPrivateKey.length : 0);
+        console.log('🔍 Private Key Preview:', formattedPrivateKey ? formattedPrivateKey.substring(0, 50) + '...' : 'null');
+        
+        if (!formattedPrivateKey || formattedPrivateKey.length < 500) {
+            throw new Error(`Invalid private key: too short (${formattedPrivateKey ? formattedPrivateKey.length : 0} chars). Expected 1600+ chars.`);
+        }
         
         firebaseConfig = {
             credential: admin.credential.cert({
                 projectId: process.env.FIREBASE_PROJECT_ID,
                 clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-                privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n')
+                privateKey: formattedPrivateKey
             })
         };
     } else {
@@ -42,6 +81,17 @@ try {
 } catch (error) {
     console.error("❌ Error initializing Firebase:", error.message);
     console.error("Full error:", error);
+    
+    // Provide helpful debugging information
+    if (error.message.includes('private key')) {
+        console.error("🔧 PRIVATE KEY TROUBLESHOOTING:");
+        console.error("1. Ensure your private key is complete (should be ~1600+ characters)");
+        console.error("2. Make sure it starts with '-----BEGIN PRIVATE KEY-----'");
+        console.error("3. Make sure it ends with '-----END PRIVATE KEY-----'");
+        console.error("4. Replace actual line breaks with \\n in Render environment variables");
+        console.error("5. Don't include quotes around the key in Render");
+    }
+    
     process.exit(1);
 }
 
