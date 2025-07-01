@@ -9,8 +9,28 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 // Middleware
-app.use(cors());
+app.use(cors({
+    origin: '*', // Allow all origins for development - you can restrict this in production
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control'],
+    credentials: false // EventSource doesn't support credentials
+}));
 app.use(express.json());
+
+// Additional CORS headers for EventSource specifically
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cache-Control');
+    res.header('Access-Control-Expose-Headers', 'Content-Type');
+    
+    // Handle preflight requests
+    if (req.method === 'OPTIONS') {
+        res.sendStatus(200);
+    } else {
+        next();
+    }
+});
 
 // Helper function to format private key properly
 function formatPrivateKey(key) {
@@ -375,42 +395,64 @@ function startNotificationListener() {
 // Start the notification listener
 startNotificationListener();
 
+// Handle OPTIONS preflight for /events endpoint
+app.options("/events", (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Cache-Control');
+    res.setHeader('Access-Control-Max-Age', '86400'); // 24 hours
+    res.sendStatus(200);
+});
+
 // Server-Sent Events endpoint
 app.get("/events", async (req, res) => {
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Headers", "Cache-Control");
+    // Set SSE headers - critical for EventSource compatibility
+    res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Cache-Control, Content-Type',
+        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        'Pragma': 'no-cache',
+        'Expires': '0',
+        'X-Accel-Buffering': 'no' // Disable nginx buffering
+    });
 
     const postsCollection = firestore.collection("admin_posts");
     let unsubscribe = null;
 
-    console.log('📡 New SSE connection established');
+    console.log('📡 New SSE connection established from:', req.headers['user-agent'] || 'Unknown');
+
+    // Send initial connection confirmation
+    res.write(`event: connected\n`);
+    res.write(`data: ${JSON.stringify({status: "connected", timestamp: new Date().toISOString()})}\n\n`);
 
     try {
         // Send initial posts
         const snapshot = await postsCollection.orderBy("timestamp", "desc").limit(10).get();
         if (!snapshot.empty) {
+            console.log(`📡 Sending ${snapshot.docs.length} initial posts to client`);
             snapshot.docs.forEach((doc) => {
                 const data = doc.data();
-                res.write(`data: ${JSON.stringify({
+                const eventData = JSON.stringify({
                     message: data.text,
                     adminEmail: data.email,
                     timestamp: data.timestamp ? data.timestamp.toDate().toISOString() : new Date().toISOString(),
                     imageUrl: data.imageUrl || null,
                     category: data.category || "General"
-                })}\n\n`);
+                });
+                res.write(`data: ${eventData}\n\n`);
             });
             lastSentPostId = snapshot.docs[0].id; 
+        } else {
+            console.log('📡 No initial posts found');
+            res.write(`data: ${JSON.stringify({message: "No announcements yet"})}\n\n`);
         }
-        
-        // Send keep-alive message
-        res.write(`event: heartbeat\ndata: ${JSON.stringify({status: "connected"})}\n\n`);
         
     } catch (error) {
         console.error("📡 Error fetching initial posts:", error);
-        res.write(`data: ${JSON.stringify({error: "Failed to load initial posts"})}\n\n`);
+        res.write(`data: ${JSON.stringify({error: "Failed to load initial posts", details: error.message})}\n\n`);
     }
 
     // Set up real-time listener with error handling
@@ -438,22 +480,21 @@ app.get("/events", async (req, res) => {
             },
             (error) => {
                 console.error("📡 SSE Firestore listener error:", error);
-                res.write(`data: ${JSON.stringify({error: "Connection lost, please refresh"})}\n\n`);
+                res.write(`data: ${JSON.stringify({error: "Connection lost, please refresh", details: error.message})}\n\n`);
             }
         );
         
     } catch (error) {
         console.error("📡 Error setting up SSE listener:", error);
-        res.write(`data: ${JSON.stringify({error: "Failed to setup real-time updates"})}\n\n`);
+        res.write(`data: ${JSON.stringify({error: "Failed to setup real-time updates", details: error.message})}\n\n`);
     }
 
     // Handle client disconnect
     req.on("close", () => {
-        console.log('📡 SSE connection closed');
+        console.log('📡 SSE connection closed by client');
         if (unsubscribe) {
             unsubscribe();
         }
-        res.end();
     });
     
     req.on("error", (error) => {
@@ -461,20 +502,28 @@ app.get("/events", async (req, res) => {
         if (unsubscribe) {
             unsubscribe();
         }
-        res.end();
     });
     
-    // Send periodic heartbeat
+    // Send periodic heartbeat to keep connection alive
     const heartbeatInterval = setInterval(() => {
-        if (res.writableEnded) {
+        if (res.destroyed || res.finished) {
             clearInterval(heartbeatInterval);
             return;
         }
-        res.write(`event: heartbeat\ndata: ${JSON.stringify({status: "alive"})}\n\n`);
+        try {
+            res.write(`event: heartbeat\n`);
+            res.write(`data: ${JSON.stringify({status: "alive", timestamp: new Date().toISOString()})}\n\n`);
+        } catch (error) {
+            console.error('📡 Error sending heartbeat:', error);
+            clearInterval(heartbeatInterval);
+        }
     }, 30000);
     
     req.on("close", () => {
         clearInterval(heartbeatInterval);
+        if (unsubscribe) {
+            unsubscribe();
+        }
     });
 });
 
@@ -502,6 +551,22 @@ app.post("/admin/post", async (req, res) => {
         console.error("Error adding post:", error);
         res.status(500).json({ error: "Failed to add post" });
     }
+});
+
+// Test endpoint for Flutter connectivity debugging
+app.get("/test-connection", (req, res) => {
+    res.json({
+        status: "success",
+        message: "Connection test successful",
+        timestamp: new Date().toISOString(),
+        userAgent: req.headers['user-agent'] || 'Unknown',
+        ip: req.ip || req.connection.remoteAddress,
+        headers: {
+            origin: req.headers.origin,
+            referer: req.headers.referer,
+            'content-type': req.headers['content-type']
+        }
+    });
 });
 
 // Health check endpoint
