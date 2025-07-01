@@ -349,36 +349,84 @@ async function handleClassNotification(notificationDoc) {
     }
 }
 
-// Notification listener with error handling
+// Notification listener with improved connection management
 let notificationListener = null;
+let isNotificationListenerActive = false;
+let retryCount = 0;
+const MAX_RETRY_COUNT = 5;
+const BASE_RETRY_DELAY = 5000; // 5 seconds
+
+function getRetryDelay(retryCount) {
+    // Exponential backoff: 5s, 10s, 20s, 40s, 80s
+    return Math.min(BASE_RETRY_DELAY * Math.pow(2, retryCount), 300000); // Max 5 minutes
+}
 
 function startNotificationListener() {
+    // Prevent multiple listeners
+    if (isNotificationListenerActive) {
+        console.log('🔔 Notification listener already active, skipping...');
+        return;
+    }
+
+    // Check retry limit
+    if (retryCount >= MAX_RETRY_COUNT) {
+        console.log('🔔 Maximum retry attempts reached, stopping notification listener');
+        return;
+    }
+
     try {
+        // Clean up existing listener
         if (notificationListener) {
+            console.log('🔔 Cleaning up existing notification listener...');
             notificationListener();
+            notificationListener = null;
         }
         
-        console.log('🔔 Starting notification listener...');
+        isNotificationListenerActive = true;
+        console.log(`🔔 Starting notification listener (attempt ${retryCount + 1}/${MAX_RETRY_COUNT})...`);
         
         notificationListener = firestore.collection('notifications').onSnapshot(
             (snapshot) => {
+                // Reset retry count on successful connection
+                retryCount = 0;
+                
                 snapshot.docChanges().forEach(async (change) => {
                     if (change.type === 'added') {
                         try {
                             await handleClassNotification(change.doc);
                         } catch (error) {
-                            console.error('Error processing notification:', error);
+                            console.error('🔔 Error processing notification:', error);
                         }
                     }
                 });
             },
             (error) => {
-                console.error('🔔 Notification listener error:', error);
-                console.log('🔄 Retrying notification listener in 30 seconds...');
+                console.error('🔔 Notification listener error:', error.message);
+                isNotificationListenerActive = false;
                 
-                setTimeout(() => {
-                    startNotificationListener();
-                }, 30000);
+                // Clean up current listener
+                if (notificationListener) {
+                    notificationListener();
+                    notificationListener = null;
+                }
+                
+                retryCount++;
+                const retryDelay = getRetryDelay(retryCount - 1);
+                
+                if (retryCount < MAX_RETRY_COUNT) {
+                    console.log(`🔄 Retrying notification listener in ${retryDelay / 1000} seconds... (${retryCount}/${MAX_RETRY_COUNT})`);
+                    
+                    setTimeout(() => {
+                        startNotificationListener();
+                    }, retryDelay);
+                } else {
+                    console.log('🔔 Maximum retries reached for notification listener. Will retry in 10 minutes.');
+                    // After max retries, wait 10 minutes then reset retry count
+                    setTimeout(() => {
+                        retryCount = 0;
+                        startNotificationListener();
+                    }, 600000); // 10 minutes
+                }
             }
         );
         
@@ -386,14 +434,30 @@ function startNotificationListener() {
         
     } catch (error) {
         console.error('🔔 Failed to start notification listener:', error);
-        setTimeout(() => {
-            startNotificationListener();
-        }, 60000);
+        isNotificationListenerActive = false;
+        retryCount++;
+        
+        const retryDelay = getRetryDelay(retryCount - 1);
+        
+        if (retryCount < MAX_RETRY_COUNT) {
+            setTimeout(() => {
+                startNotificationListener();
+            }, retryDelay);
+        } else {
+            console.log('🔔 Maximum retries reached. Will retry in 10 minutes.');
+            setTimeout(() => {
+                retryCount = 0;
+                startNotificationListener();
+            }, 600000); // 10 minutes
+        }
     }
 }
 
-// Start the notification listener
-startNotificationListener();
+// Start the notification listener with delay to avoid startup conflicts
+setTimeout(() => {
+    console.log('🔔 Initializing notification listener...');
+    startNotificationListener();
+}, 5000); // Wait 5 seconds after server startup
 
 // Handle OPTIONS preflight for /events endpoint
 app.options("/events", (req, res) => {
