@@ -592,7 +592,7 @@ class _GroupChatListState extends State<GroupChatList> {
   void initState() {
     super.initState(); 
     _channel = WebSocketChannel.connect(
-        Uri.parse("ws://192.168.0.15:3000?user=${widget.userId}"));
+        Uri.parse("wss://sharenow-2cyw.onrender.com?user=${widget.userId}"));
 
     _channel.stream.listen((message) {
       final data = jsonDecode(message);

@@ -70,7 +70,7 @@ class _PostPageState extends State<PostPage> {
         imageUrl = await ImageHelper.uploadImageToFirebase(_selectedImage!);
       }
 
-      final uri = Uri.parse("http://192.168.0.31:4000/admin/post");
+      final uri = Uri.parse("https://sharenow-2cyw.onrender.com/admin/post");
       final response = await http.post(
         uri,
         body: jsonEncode({

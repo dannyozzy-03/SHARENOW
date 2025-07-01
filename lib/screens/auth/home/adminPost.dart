@@ -133,7 +133,7 @@ class _AdminPostPageState extends State<AdminPostPage> with TickerProviderStateM
 
     try {
       _eventSource = await EventSource.connect(
-        "http://192.168.0.31:4000/events",
+        "https://sharenow-2cyw.onrender.com/events",
       );
 
       _eventSource!.listen(

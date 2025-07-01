@@ -94,74 +94,74 @@ class _PersonalChatState extends State<PersonalChat> {
   }
 
   void connectWebSocket() {
-  final String serverUrl = "ws://192.168.0.15:3000";
+    final String serverUrl = "wss://sharenow-2cyw.onrender.com";
   
-  try {
-    channel = IOWebSocketChannel.connect(Uri.parse(serverUrl));
-    
-    channel.sink.add(jsonEncode({
-      "type": "register", 
-      "userId": currentUserId,
-      "chatId": chatId,
-      "isActive": true
-    }));
+    try {
+      channel = IOWebSocketChannel.connect(Uri.parse(serverUrl));
+      
+      channel.sink.add(jsonEncode({
+        "type": "register", 
+        "userId": currentUserId,
+        "chatId": chatId,
+        "isActive": true
+      }));
 
-    channel.stream.listen((message) {
-      Map<String, dynamic> decodedMessage = jsonDecode(message);
-      if (decodedMessage['receiver'] == currentUserId &&
-          decodedMessage['sender'] == widget.receiverId) {
-        
-        String messageId = decodedMessage['messageId'] ?? 
-            '${decodedMessage['sender']}_${DateTime.now().millisecondsSinceEpoch}';
-
-        FirebaseFirestore.instance
-            .collection('chats')
-            .doc(chatId)
-            .get()
-            .then((chatDoc) {
-          Map<String, dynamic> activeUsers = 
-              chatDoc.data()?['activeUsers'] ?? {};
+      channel.stream.listen((message) {
+        Map<String, dynamic> decodedMessage = jsonDecode(message);
+        if (decodedMessage['receiver'] == currentUserId &&
+            decodedMessage['sender'] == widget.receiverId) {
           
-          bool isReceiverActive = activeUsers[currentUserId] ?? false;
-          bool isSenderActive = activeUsers[widget.receiverId] ?? false;
-
-          // Add message to messages collection
-          FirebaseFirestore.instance
-              .collection('chats')
-              .doc(chatId)
-              .collection('messages')
-              .add({
-            'sender': decodedMessage['sender'],
-            'text': decodedMessage['text'],
-            'timestamp': Timestamp.now(),
-            'messageId': messageId,
-            'readBy': isReceiverActive 
-                ? [decodedMessage['sender'], currentUserId]
-                : [decodedMessage['sender']],
-          });
-
-          // Update chat document
-          Map<String, dynamic> readByMap = 
-              chatDoc.data()?['readBy'] ?? {};
-          
-          readByMap[widget.receiverId] = isSenderActive;
-          readByMap[currentUserId] = isReceiverActive;
+          String messageId = decodedMessage['messageId'] ?? 
+              '${decodedMessage['sender']}_${DateTime.now().millisecondsSinceEpoch}';
 
           FirebaseFirestore.instance
               .collection('chats')
               .doc(chatId)
-              .update({
-            'lastMessage': decodedMessage['text'],
-            'lastTimestamp': Timestamp.now(),
-            'readBy': readByMap,
+              .get()
+              .then((chatDoc) {
+            Map<String, dynamic> activeUsers = 
+                chatDoc.data()?['activeUsers'] ?? {};
+            
+            bool isReceiverActive = activeUsers[currentUserId] ?? false;
+            bool isSenderActive = activeUsers[widget.receiverId] ?? false;
+
+            // Add message to messages collection
+            FirebaseFirestore.instance
+                .collection('chats')
+                .doc(chatId)
+                .collection('messages')
+                .add({
+              'sender': decodedMessage['sender'],
+              'text': decodedMessage['text'],
+              'timestamp': Timestamp.now(),
+              'messageId': messageId,
+              'readBy': isReceiverActive 
+                  ? [decodedMessage['sender'], currentUserId]
+                  : [decodedMessage['sender']],
+            });
+
+            // Update chat document
+            Map<String, dynamic> readByMap = 
+                chatDoc.data()?['readBy'] ?? {};
+            
+            readByMap[widget.receiverId] = isSenderActive;
+            readByMap[currentUserId] = isReceiverActive;
+
+            FirebaseFirestore.instance
+                .collection('chats')
+                .doc(chatId)
+                .update({
+              'lastMessage': decodedMessage['text'],
+              'lastTimestamp': Timestamp.now(),
+              'readBy': readByMap,
+            });
           });
-        });
-      }
-    });
-  } catch (e) {
-    print('Connection Error: $e');
+        }
+      });
+    } catch (e) {
+      print('Connection Error: $e');
+    }
   }
-}
 
   void sendMessage() {
     if (messageController.text.isNotEmpty) {
