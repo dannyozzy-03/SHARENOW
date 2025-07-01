@@ -1,0 +1,2 @@
+C:/twitter clone/twitterr/android/app/.cxx/RelWithDebInfo/365b5j71/arm64-v8a/CMakeFiles/edit_cache.dir
+C:/twitter clone/twitterr/android/app/.cxx/RelWithDebInfo/365b5j71/arm64-v8a/CMakeFiles/rebuild_cache.dir

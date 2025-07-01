@@ -1,0 +1,1 @@
+C:\twitter clone\twitterr\build\app\intermediates\cxx\RelWithDebInfo\365b5j71\obj\x86
