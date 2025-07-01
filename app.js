@@ -45,6 +45,13 @@ function formatPrivateKey(key) {
     // Replace escaped newlines with actual newlines
     cleanKey = cleanKey.replace(/\\n/g, '\n');
     
+    // Also handle case where newlines might be missing entirely
+    if (!cleanKey.includes('\n')) {
+        // If no newlines found, try to add them at proper positions
+        cleanKey = cleanKey.replace(/-----BEGIN PRIVATE KEY-----/, '-----BEGIN PRIVATE KEY-----\n');
+        cleanKey = cleanKey.replace(/-----END PRIVATE KEY-----/, '\n-----END PRIVATE KEY-----');
+    }
+    
     console.log('🔍 After \\n replacement first 100 chars:', cleanKey.substring(0, 100));
     console.log('🔍 After \\n replacement last 100 chars:', cleanKey.substring(cleanKey.length - 100));
     
@@ -82,14 +89,15 @@ function formatPrivateKey(key) {
 }
 
 // Initialize Firebase Admin
-try {
-    let firebaseConfig;
-    
-    console.log('🔥 Initializing Firebase...');
-    console.log('📍 Environment:', process.env.NODE_ENV || 'development');
-    
-    // Prefer environment variables in production for security
-    if (process.env.NODE_ENV === 'production' && process.env.FIREBASE_PROJECT_ID) {
+async function initializeFirebase() {
+    try {
+        let firebaseConfig;
+        
+        console.log('🔥 Initializing Firebase...');
+        console.log('📍 Environment:', process.env.NODE_ENV || 'development');
+        
+        // Prefer environment variables in production for security
+        if (process.env.NODE_ENV === 'production' && process.env.FIREBASE_PROJECT_ID) {
         console.log('🔧 Using environment variables for production deployment...');
         console.log('📋 Project ID:', process.env.FIREBASE_PROJECT_ID);
         console.log('📧 Client Email:', process.env.FIREBASE_CLIENT_EMAIL);
@@ -112,6 +120,16 @@ try {
         
         admin.initializeApp(firebaseConfig);
         console.log("✅ Firebase initialized successfully with environment variables");
+        
+        // Test Firestore connection immediately after initialization
+        try {
+            console.log("🧪 Testing Firestore connection...");
+            const testSnapshot = await admin.firestore().collection("admin_posts").limit(1).get();
+            console.log("✅ Firestore connection test successful");
+        } catch (testError) {
+            console.error("❌ Firestore connection test failed:", testError.message);
+            throw new Error(`Firestore test failed: ${testError.message}`);
+        }
         
     } else {
         // Fallback to service account file for development
@@ -157,24 +175,39 @@ try {
         }
         }
     }
-    
-} catch (error) {
-    console.error("❌ Error initializing Firebase:", error.message);
-    console.error("Full error:", error);
-    
-    // Provide helpful debugging information
-    console.error("🔧 FIREBASE TROUBLESHOOTING:");
-    console.error("1. Ensure serviceAccountKey.json is present and valid");
-    console.error("2. If using environment variables, ensure private key is properly formatted");
-    console.error("3. Check Firebase project settings and permissions");
-    console.error("4. Verify all required dependencies are installed");
-    
-    process.exit(1);
+        
+    } catch (error) {
+        console.error("❌ Error initializing Firebase:", error.message);
+        console.error("Full error:", error);
+        
+        // Provide helpful debugging information
+        console.error("🔧 FIREBASE TROUBLESHOOTING:");
+        console.error("1. Ensure serviceAccountKey.json is present and valid");
+        console.error("2. If using environment variables, ensure private key is properly formatted");
+        console.error("3. Check Firebase project settings and permissions");
+        console.error("4. Verify all required dependencies are installed");
+        
+        process.exit(1);
+    }
 }
 
-const firestore = admin.firestore();
+let firestore;
 const clients = new Map();
 let lastSentPostId = null;
+
+// Initialize Firebase and start server
+initializeFirebase().then(() => {
+    firestore = admin.firestore();
+    console.log("🔧 Firestore instance created successfully");
+    
+    // Start the server after Firebase is ready
+    startServer();
+}).catch((error) => {
+    console.error("❌ Failed to initialize Firebase:", error);
+    process.exit(1);
+});
+
+function startServer() {
 
 // ========== WEBSOCKET FUNCTIONALITY ==========
 wss.on("connection", (ws, req) => {
@@ -478,11 +511,7 @@ function startNotificationListener() {
     }
 }
 
-// Start the notification listener with delay to avoid startup conflicts
-setTimeout(() => {
-    console.log('🔔 Initializing notification listener...');
-    startNotificationListener();
-}, 5000); // Wait 5 seconds after server startup
+// Notification listener will be started after server initialization
 
 // Handle OPTIONS preflight for /events endpoint
 app.options("/events", (req, res) => {
@@ -735,21 +764,29 @@ process.on('uncaughtException', (error) => {
     process.exit(1);
 });
 
-// Start server
-const PORT = process.env.PORT || 4000;
-console.log('🚀 Starting server...');
-console.log('📍 Environment:', process.env.NODE_ENV || 'development');
-console.log('🔌 Port:', PORT);
-console.log('🌐 Host: 0.0.0.0');
+    // Start server
+    const PORT = process.env.PORT || 4000;
+    console.log('🚀 Starting server...');
+    console.log('📍 Environment:', process.env.NODE_ENV || 'development');
+    console.log('🔌 Port:', PORT);
+    console.log('🌐 Host: 0.0.0.0');
 
-server.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
-    console.log(`📡 WebSocket: ws://0.0.0.0:${PORT}`);
-    console.log(`🌐 Admin Post: http://0.0.0.0:${PORT}/admin/post`);
-    console.log(`📊 Health: http://0.0.0.0:${PORT}/health`);
-    console.log(`📡 Events: http://0.0.0.0:${PORT}/events`);
-    console.log(`🎯 Ready for Render deployment!`);
-}).on('error', (err) => {
-    console.error('❌ Server startup error:', err);
-    process.exit(1);
-}); 
+    server.listen(PORT, '0.0.0.0', () => {
+        console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
+        console.log(`📡 WebSocket: ws://0.0.0.0:${PORT}`);
+        console.log(`🌐 Admin Post: http://0.0.0.0:${PORT}/admin/post`);
+        console.log(`📊 Health: http://0.0.0.0:${PORT}/health`);
+        console.log(`📡 Events: http://0.0.0.0:${PORT}/events`);
+        console.log(`🎯 Ready for Render deployment!`);
+        
+        // Start the notification listener after server is running
+        setTimeout(() => {
+            console.log('🔔 Initializing notification listener...');
+            startNotificationListener();
+        }, 5000); // Wait 5 seconds after server startup
+        
+    }).on('error', (err) => {
+        console.error('❌ Server startup error:', err);
+        process.exit(1);
+    });
+}
