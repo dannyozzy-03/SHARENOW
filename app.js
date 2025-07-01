@@ -96,45 +96,9 @@ async function initializeFirebase() {
         console.log('🔥 Initializing Firebase...');
         console.log('📍 Environment:', process.env.NODE_ENV || 'development');
         
-        // Prefer environment variables in production for security
-        if (process.env.NODE_ENV === 'production' && process.env.FIREBASE_PROJECT_ID) {
-        console.log('🔧 Using environment variables for production deployment...');
-        console.log('📋 Project ID:', process.env.FIREBASE_PROJECT_ID);
-        console.log('📧 Client Email:', process.env.FIREBASE_CLIENT_EMAIL);
-        console.log('🔑 Private Key Length:', process.env.FIREBASE_PRIVATE_KEY ? process.env.FIREBASE_PRIVATE_KEY.length : 0);
-        
-        const formattedPrivateKey = formatPrivateKey(process.env.FIREBASE_PRIVATE_KEY);
-        console.log('🔧 Formatted Private Key Length:', formattedPrivateKey ? formattedPrivateKey.length : 0);
-        
-        if (!formattedPrivateKey || formattedPrivateKey.length < 500) {
-            throw new Error(`Invalid private key: too short (${formattedPrivateKey ? formattedPrivateKey.length : 0} chars). Expected 1600+ chars.`);
-        }
-        
-        firebaseConfig = {
-            credential: admin.credential.cert({
-                projectId: process.env.FIREBASE_PROJECT_ID,
-                clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-                privateKey: formattedPrivateKey
-            })
-        };
-        
-        admin.initializeApp(firebaseConfig);
-        console.log("✅ Firebase initialized successfully with environment variables");
-        
-        // Test Firestore connection immediately after initialization
+                // Always use service account file for reliable authentication
         try {
-            console.log("🧪 Testing Firestore connection...");
-            const testSnapshot = await admin.firestore().collection("admin_posts").limit(1).get();
-            console.log("✅ Firestore connection test successful");
-        } catch (testError) {
-            console.error("❌ Firestore connection test failed:", testError.message);
-            throw new Error(`Firestore test failed: ${testError.message}`);
-        }
-        
-    } else {
-        // Fallback to service account file for development
-        try {
-            console.log('🔧 Attempting service account file method for development...');
+            console.log('🔧 Using service account file method...');
             firebaseConfig = {
                 credential: admin.credential.cert(require("./serviceAccountKey.json"))
             };
@@ -142,39 +106,15 @@ async function initializeFirebase() {
             admin.initializeApp(firebaseConfig);
             console.log("✅ Firebase initialized successfully with service account file");
             
+            // Test Firestore connection immediately after initialization
+            console.log("🧪 Testing Firestore connection...");
+            const testSnapshot = await admin.firestore().collection("admin_posts").limit(1).get();
+            console.log("✅ Firestore connection test successful");
+            
         } catch (serviceAccountError) {
-            console.log('❌ Service account file failed, trying environment variables...');
-            console.log('Service account error:', serviceAccountError.message);
-            
-            // Final fallback to environment variables
-            if (process.env.FIREBASE_PROJECT_ID) {
-            console.log('🔧 Attempting environment variables method...');
-            console.log('📋 Project ID:', process.env.FIREBASE_PROJECT_ID);
-            console.log('📧 Client Email:', process.env.FIREBASE_CLIENT_EMAIL);
-            console.log('🔑 Raw Private Key Length:', process.env.FIREBASE_PRIVATE_KEY ? process.env.FIREBASE_PRIVATE_KEY.length : 0);
-            
-            const formattedPrivateKey = formatPrivateKey(process.env.FIREBASE_PRIVATE_KEY);
-            console.log('🔧 Formatted Private Key Length:', formattedPrivateKey ? formattedPrivateKey.length : 0);
-            
-            if (!formattedPrivateKey || formattedPrivateKey.length < 500) {
-                throw new Error(`Invalid private key: too short (${formattedPrivateKey ? formattedPrivateKey.length : 0} chars). Expected 1600+ chars.`);
-            }
-            
-            firebaseConfig = {
-                credential: admin.credential.cert({
-                    projectId: process.env.FIREBASE_PROJECT_ID,
-                    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-                    privateKey: formattedPrivateKey
-                })
-            };
-            
-            admin.initializeApp(firebaseConfig);
-            console.log("✅ Firebase initialized successfully with environment variables");
-        } else {
-            throw new Error('Neither service account file nor environment variables are available');
+            console.error('❌ Service account file failed:', serviceAccountError.message);
+            throw new Error(`Firebase initialization failed: ${serviceAccountError.message}`);
         }
-        }
-    }
         
     } catch (error) {
         console.error("❌ Error initializing Firebase:", error.message);
