@@ -5,7 +5,7 @@ yarn-debug.log*
 yarn-error.log*
 
 # Firebase sensitive files
-serviceAccountKey.json
+# serviceAccountKey.json  # Temporarily commented out for Render deployment
 firebase-adminsdk-*.json
 
 # Environment files

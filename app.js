@@ -16,81 +16,113 @@ app.use(express.json());
 function formatPrivateKey(key) {
     if (!key) return null;
     
+    console.log('🔍 Raw key first 100 chars:', key.substring(0, 100));
+    console.log('🔍 Raw key last 100 chars:', key.substring(key.length - 100));
+    
     // Remove any extra whitespace and quotes
     let cleanKey = key.trim().replace(/^["']|["']$/g, '');
     
-    // If the key doesn't start with -----BEGIN, it might be base64 encoded or malformed
-    if (!cleanKey.startsWith('-----BEGIN PRIVATE KEY-----')) {
-        console.log('🔧 Private key doesn\'t start with BEGIN marker, trying to fix...');
-        
-        // Try to add proper headers if missing
-        if (!cleanKey.includes('-----BEGIN PRIVATE KEY-----')) {
-            // If it's just the key content, wrap it properly
-            const keyContent = cleanKey.replace(/-----.*?-----/g, '').replace(/\s/g, '');
-            cleanKey = `-----BEGIN PRIVATE KEY-----\n${keyContent.match(/.{1,64}/g).join('\n')}\n-----END PRIVATE KEY-----`;
-        }
-    }
-    
-    // Ensure proper line breaks
+    // Replace escaped newlines with actual newlines
     cleanKey = cleanKey.replace(/\\n/g, '\n');
     
-    // Fix common formatting issues
-    cleanKey = cleanKey
-        .replace(/-----BEGIN PRIVATE KEY-----\s*/, '-----BEGIN PRIVATE KEY-----\n')
-        .replace(/\s*-----END PRIVATE KEY-----/, '\n-----END PRIVATE KEY-----')
-        .replace(/\n\n+/g, '\n'); // Remove extra newlines
+    console.log('🔍 After \\n replacement first 100 chars:', cleanKey.substring(0, 100));
+    console.log('🔍 After \\n replacement last 100 chars:', cleanKey.substring(cleanKey.length - 100));
     
-    return cleanKey;
+    // Validate key structure
+    if (!cleanKey.includes('-----BEGIN PRIVATE KEY-----')) {
+        console.error('❌ Key missing BEGIN marker');
+        return null;
+    }
+    
+    if (!cleanKey.includes('-----END PRIVATE KEY-----')) {
+        console.error('❌ Key missing END marker');
+        return null;
+    }
+    
+    // Extract the key content between markers
+    const beginMarker = '-----BEGIN PRIVATE KEY-----';
+    const endMarker = '-----END PRIVATE KEY-----';
+    
+    const beginIndex = cleanKey.indexOf(beginMarker);
+    const endIndex = cleanKey.indexOf(endMarker);
+    
+    if (beginIndex === -1 || endIndex === -1) {
+        console.error('❌ Invalid key structure');
+        return null;
+    }
+    
+    // Reconstruct the key properly
+    const keyContent = cleanKey.substring(beginIndex + beginMarker.length, endIndex).trim();
+    const reconstructedKey = `${beginMarker}\n${keyContent}\n${endMarker}`;
+    
+    console.log('🔍 Reconstructed key first 100 chars:', reconstructedKey.substring(0, 100));
+    console.log('🔍 Reconstructed key last 100 chars:', reconstructedKey.substring(reconstructedKey.length - 100));
+    
+    return reconstructedKey;
 }
 
 // Initialize Firebase Admin
 try {
     let firebaseConfig;
     
-    // Check if we're in production and have environment variables
-    if (process.env.NODE_ENV === 'production' && process.env.FIREBASE_PROJECT_ID) {
-        console.log('🔥 Initializing Firebase with environment variables');
-        console.log('📋 Project ID:', process.env.FIREBASE_PROJECT_ID);
-        console.log('📧 Client Email:', process.env.FIREBASE_CLIENT_EMAIL);
-        console.log('🔑 Raw Private Key Length:', process.env.FIREBASE_PRIVATE_KEY ? process.env.FIREBASE_PRIVATE_KEY.length : 0);
-        
-        const formattedPrivateKey = formatPrivateKey(process.env.FIREBASE_PRIVATE_KEY);
-        console.log('🔧 Formatted Private Key Length:', formattedPrivateKey ? formattedPrivateKey.length : 0);
-        console.log('🔍 Private Key Preview:', formattedPrivateKey ? formattedPrivateKey.substring(0, 50) + '...' : 'null');
-        
-        if (!formattedPrivateKey || formattedPrivateKey.length < 500) {
-            throw new Error(`Invalid private key: too short (${formattedPrivateKey ? formattedPrivateKey.length : 0} chars). Expected 1600+ chars.`);
-        }
-        
-        firebaseConfig = {
-            credential: admin.credential.cert({
-                projectId: process.env.FIREBASE_PROJECT_ID,
-                clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-                privateKey: formattedPrivateKey
-            })
-        };
-    } else {
-        console.log('🔥 Initializing Firebase with service account file');
+    // For Render deployment, prioritize service account file which is more reliable
+    // than environment variables for private keys
+    console.log('🔥 Initializing Firebase...');
+    console.log('📍 Environment:', process.env.NODE_ENV || 'development');
+    
+    try {
+        // First, try service account file (most reliable)
+        console.log('🔧 Attempting service account file method...');
         firebaseConfig = {
             credential: admin.credential.cert(require("./serviceAccountKey.json"))
         };
+        
+        admin.initializeApp(firebaseConfig);
+        console.log("✅ Firebase initialized successfully with service account file");
+        
+    } catch (serviceAccountError) {
+        console.log('❌ Service account file failed, trying environment variables...');
+        console.log('Service account error:', serviceAccountError.message);
+        
+        // Fallback to environment variables if service account file fails
+        if (process.env.NODE_ENV === 'production' && process.env.FIREBASE_PROJECT_ID) {
+            console.log('🔧 Attempting environment variables method...');
+            console.log('📋 Project ID:', process.env.FIREBASE_PROJECT_ID);
+            console.log('📧 Client Email:', process.env.FIREBASE_CLIENT_EMAIL);
+            console.log('🔑 Raw Private Key Length:', process.env.FIREBASE_PRIVATE_KEY ? process.env.FIREBASE_PRIVATE_KEY.length : 0);
+            
+            const formattedPrivateKey = formatPrivateKey(process.env.FIREBASE_PRIVATE_KEY);
+            console.log('🔧 Formatted Private Key Length:', formattedPrivateKey ? formattedPrivateKey.length : 0);
+            
+            if (!formattedPrivateKey || formattedPrivateKey.length < 500) {
+                throw new Error(`Invalid private key: too short (${formattedPrivateKey ? formattedPrivateKey.length : 0} chars). Expected 1600+ chars.`);
+            }
+            
+            firebaseConfig = {
+                credential: admin.credential.cert({
+                    projectId: process.env.FIREBASE_PROJECT_ID,
+                    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+                    privateKey: formattedPrivateKey
+                })
+            };
+            
+            admin.initializeApp(firebaseConfig);
+            console.log("✅ Firebase initialized successfully with environment variables");
+        } else {
+            throw new Error('Neither service account file nor environment variables are available');
+        }
     }
     
-    admin.initializeApp(firebaseConfig);
-    console.log("✅ Firebase initialized successfully");
 } catch (error) {
     console.error("❌ Error initializing Firebase:", error.message);
     console.error("Full error:", error);
     
     // Provide helpful debugging information
-    if (error.message.includes('private key')) {
-        console.error("🔧 PRIVATE KEY TROUBLESHOOTING:");
-        console.error("1. Ensure your private key is complete (should be ~1600+ characters)");
-        console.error("2. Make sure it starts with '-----BEGIN PRIVATE KEY-----'");
-        console.error("3. Make sure it ends with '-----END PRIVATE KEY-----'");
-        console.error("4. Replace actual line breaks with \\n in Render environment variables");
-        console.error("5. Don't include quotes around the key in Render");
-    }
+    console.error("🔧 FIREBASE TROUBLESHOOTING:");
+    console.error("1. Ensure serviceAccountKey.json is present and valid");
+    console.error("2. If using environment variables, ensure private key is properly formatted");
+    console.error("3. Check Firebase project settings and permissions");
+    console.error("4. Verify all required dependencies are installed");
     
     process.exit(1);
 }
