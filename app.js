@@ -96,25 +96,47 @@ async function initializeFirebase() {
         console.log('🔥 Initializing Firebase...');
         console.log('📍 Environment:', process.env.NODE_ENV || 'development');
         
-                // Always use service account file for reliable authentication
-        try {
-            console.log('🔧 Using service account file method...');
+                // Use environment variables in production, service account file in development
+        if (process.env.NODE_ENV === 'production' && process.env.FIREBASE_PROJECT_ID) {
+            console.log('🔧 Using environment variables for production...');
+            
+            const formattedPrivateKey = formatPrivateKey(process.env.FIREBASE_PRIVATE_KEY);
+            if (!formattedPrivateKey || formattedPrivateKey.length < 500) {
+                throw new Error(`Invalid private key: too short (${formattedPrivateKey ? formattedPrivateKey.length : 0} chars)`);
+            }
+            
             firebaseConfig = {
-                credential: admin.credential.cert(require("./serviceAccountKey.json"))
+                credential: admin.credential.cert({
+                    projectId: process.env.FIREBASE_PROJECT_ID,
+                    clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+                    privateKey: formattedPrivateKey
+                })
             };
             
             admin.initializeApp(firebaseConfig);
-            console.log("✅ Firebase initialized successfully with service account file");
+            console.log("✅ Firebase initialized successfully with environment variables");
             
-            // Test Firestore connection immediately after initialization
-            console.log("🧪 Testing Firestore connection...");
-            const testSnapshot = await admin.firestore().collection("admin_posts").limit(1).get();
-            console.log("✅ Firestore connection test successful");
-            
-        } catch (serviceAccountError) {
-            console.error('❌ Service account file failed:', serviceAccountError.message);
-            throw new Error(`Firebase initialization failed: ${serviceAccountError.message}`);
+        } else {
+            // Fallback to service account file for development
+            try {
+                console.log('🔧 Using service account file for development...');
+                firebaseConfig = {
+                    credential: admin.credential.cert(require("./serviceAccountKey.json"))
+                };
+                
+                admin.initializeApp(firebaseConfig);
+                console.log("✅ Firebase initialized successfully with service account file");
+                
+            } catch (serviceAccountError) {
+                console.error('❌ Service account file failed:', serviceAccountError.message);
+                throw new Error(`Firebase initialization failed: ${serviceAccountError.message}`);
+            }
         }
+        
+        // Test Firestore connection after initialization
+        console.log("🧪 Testing Firestore connection...");
+        const testSnapshot = await admin.firestore().collection("admin_posts").limit(1).get();
+        console.log("✅ Firestore connection test successful");
         
     } catch (error) {
         console.error("❌ Error initializing Firebase:", error.message);
