@@ -43,7 +43,7 @@ class _GroupChatState extends State<GroupChat> {
 
     try {
       // Connect to WebSocket with proper URL format and error handling
-      final String serverUrl = "wss://sharenow-2cyw.onrender.com?userId=$currentUserId";
+      final String serverUrl = "wss://sharenow-ipuj.onrender.com?userId=$currentUserId";
       channel = IOWebSocketChannel.connect(
         Uri.parse(serverUrl),
         pingInterval: Duration(seconds: 30),

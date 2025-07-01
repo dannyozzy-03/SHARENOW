@@ -153,7 +153,7 @@ class _AdminPostPageState extends State<AdminPostPage> with TickerProviderStateM
       print("🔄 Attempting SSE connection (attempt ${_reconnectAttempts + 1})...");
       
       final client = http.Client();
-      final request = http.Request('GET', Uri.parse("https://sharenow-2cyw.onrender.com/events"));
+      final request = http.Request('GET', Uri.parse("https://sharenow-ipuj.onrender.com/events"));
       
       // Add headers for better compatibility
       request.headers.addAll({
