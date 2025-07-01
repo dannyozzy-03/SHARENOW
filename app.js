@@ -19,6 +19,10 @@ try {
     // Check if we're in production and have environment variables
     if (process.env.NODE_ENV === 'production' && process.env.FIREBASE_PROJECT_ID) {
         console.log('🔥 Initializing Firebase with environment variables');
+        console.log('📋 Project ID:', process.env.FIREBASE_PROJECT_ID);
+        console.log('📧 Client Email:', process.env.FIREBASE_CLIENT_EMAIL);
+        console.log('🔑 Private Key Length:', process.env.FIREBASE_PRIVATE_KEY ? process.env.FIREBASE_PRIVATE_KEY.length : 0);
+        
         firebaseConfig = {
             credential: admin.credential.cert({
                 projectId: process.env.FIREBASE_PROJECT_ID,
@@ -37,6 +41,7 @@ try {
     console.log("✅ Firebase initialized successfully");
 } catch (error) {
     console.error("❌ Error initializing Firebase:", error.message);
+    console.error("Full error:", error);
     process.exit(1);
 }
 
@@ -357,10 +362,19 @@ app.get("/", (req, res) => {
 
 // Start server
 const PORT = process.env.PORT || 4000;
+console.log('🚀 Starting server...');
+console.log('📍 Environment:', process.env.NODE_ENV || 'development');
+console.log('🔌 Port:', PORT);
+console.log('🌐 Host: 0.0.0.0');
+
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
     console.log(`📡 WebSocket: ws://0.0.0.0:${PORT}`);
     console.log(`🌐 Admin Post: http://0.0.0.0:${PORT}/admin/post`);
     console.log(`📊 Health: http://0.0.0.0:${PORT}/health`);
+    console.log(`📡 Events: http://0.0.0.0:${PORT}/events`);
     console.log(`🎯 Ready for Render deployment!`);
+}).on('error', (err) => {
+    console.error('❌ Server startup error:', err);
+    process.exit(1);
 }); 
