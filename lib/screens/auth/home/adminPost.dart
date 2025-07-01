@@ -1,12 +1,13 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:eventsource/eventsource.dart';
 import 'package:intl/intl.dart'; 
 import 'package:twitterr/screens/auth/home/addAdminPost.dart';
 import 'package:twitterr/screens/auth/home/savedPosts.dart';
 import 'package:timeago/timeago.dart' as timeago;
+import 'package:http/http.dart' as http;
 
 final Map<String, Color> universityColors = {
   'primary': Color(0xFF1E3A8A),        // University Navy Blue
@@ -79,6 +80,14 @@ class _AdminPostPageState extends State<AdminPostPage> with TickerProviderStateM
     },
   ];
 
+  // Add these variables at the top of your class
+  Timer? _reconnectTimer;
+  StreamSubscription? _streamSubscription;
+  bool _isConnecting = false;
+  int _reconnectAttempts = 0;
+  static const int _maxReconnectAttempts = 5;
+  static const int _reconnectDelay = 3; // seconds
+
   @override
   void initState() {
     super.initState();
@@ -120,89 +129,192 @@ class _AdminPostPageState extends State<AdminPostPage> with TickerProviderStateM
     });
   }
 
-  EventSource? _eventSource;
-
   Future<void> _listenToAdminPosts() async {
-    if (_eventSource != null) {
-      _disconnectEventSource();
+    if (_isConnecting) {
+      print("Already connecting, skipping...");
+      return;
     }
 
+    _isConnecting = true;
     setState(() {
       isLoading = true;
     });
 
     try {
-      _eventSource = await EventSource.connect(
-        "https://sharenow-2cyw.onrender.com/events",
-      );
-
-      _eventSource!.listen(
-        (Event event) {
-          final String jsonString = event.data?.trim() ?? '';
-          if (jsonString.isEmpty) {
-            setState(() {
-              isLoading = false;
-            });
-            return;
-          }
-
-          try {
-            final jsonData = jsonDecode(jsonString);
-            if (jsonData is Map<String, dynamic> && jsonData.containsKey("message")) {
-              setState(() {
-                bool isDuplicate = adminPosts.any((post) => 
-                  post["message"] == jsonData["message"]);
-
-                if (!isDuplicate) {
-                  adminPosts.insert(0, {
-                    "message": jsonData["message"].toString(),
-                    "imageUrl": jsonData["imageUrl"] ?? "",
-                    "timestamp": jsonData["timestamp"] ?? DateTime.now().toString(),
-                    "category": jsonData["category"] ?? "General",
-                  });
-
-                  adminPosts.sort((a, b) {
-                    DateTime aTime = _parseTimestamp(a["timestamp"]);
-                    DateTime bTime = _parseTimestamp(b["timestamp"]);
-                    return bTime.compareTo(aTime);
-                  });
-                }
-                isLoading = false;
-              });
-            }
-          } catch (e) {
-            print("JSON Parsing Error: $e | Raw Data: $jsonString");
-            setState(() {
-              isLoading = false;
-            });
-          }
-        },
-        onError: (error) {
-          print("EventSource Error: $error");
-          setState(() {
-            isLoading = false;
-          });
-          _disconnectEventSource();
-        },
-        cancelOnError: true,
-      );
+      await _connectToSSE();
     } catch (e) {
       print("Connection Error: $e");
+      _handleConnectionError();
+    }
+  }
+
+  Future<void> _connectToSSE() async {
+    try {
+      print("🔄 Attempting SSE connection (attempt ${_reconnectAttempts + 1})...");
+      
+      final client = http.Client();
+      final request = http.Request('GET', Uri.parse("https://sharenow-2cyw.onrender.com/events"));
+      
+      // Add headers for better compatibility
+      request.headers.addAll({
+        'Accept': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+      });
+
+      final response = await client.send(request);
+      
+      if (response.statusCode != 200) {
+        throw Exception('HTTP ${response.statusCode}: Failed to connect to SSE');
+      }
+
+      print("✅ SSE connection established successfully");
+      _reconnectAttempts = 0; // Reset on successful connection
+      _isConnecting = false;
+
       setState(() {
         isLoading = false;
       });
-      _disconnectEventSource();
+
+      // Listen to the stream
+      _streamSubscription = response.stream
+          .timeout(
+            Duration(seconds: 65), // Longer than server heartbeat (30s)
+            onTimeout: (sink) {
+              print("⏰ SSE connection timeout, reconnecting...");
+              sink.close();
+              _handleConnectionError();
+            },
+          )
+          .transform(utf8.decoder)
+          .transform(LineSplitter())
+          .listen(
+            (line) {
+              _handleSSELine(line);
+            },
+            onError: (error) {
+              print("📡 SSE Stream Error: $error");
+              _handleConnectionError();
+            },
+            onDone: () {
+              print("📡 SSE Stream closed");
+              _handleConnectionError();
+            },
+          );
+
+    } catch (e) {
+      print("❌ SSE Connection failed: $e");
+      _isConnecting = false;
+      _handleConnectionError();
+    }
+  }
+
+  void _handleSSELine(String line) {
+    if (line.startsWith('data: ')) {
+      String jsonString = line.substring(6).trim();
+      
+      if (jsonString.isEmpty) return;
+      
+      try {
+        final jsonData = jsonDecode(jsonString);
+        
+        // Handle connection confirmation
+        if (jsonData is Map<String, dynamic> && jsonData.containsKey("status")) {
+          if (jsonData["status"] == "connected") {
+            print("✅ SSE connection confirmed by server");
+            return;
+          }
+          if (jsonData["status"] == "alive") {
+            // Heartbeat received, connection is healthy
+            return;
+          }
+        }
+        
+        // Handle announcement data
+        if (jsonData is Map<String, dynamic> && jsonData.containsKey("message")) {
+          setState(() {
+            bool isDuplicate = adminPosts.any((post) => 
+              post["message"] == jsonData["message"]);
+
+            if (!isDuplicate) {
+              adminPosts.insert(0, {
+                "message": jsonData["message"].toString(),
+                "imageUrl": jsonData["imageUrl"] ?? "",
+                "timestamp": jsonData["timestamp"] ?? DateTime.now().toString(),
+                "category": jsonData["category"] ?? "General",
+              });
+
+              adminPosts.sort((a, b) {
+                DateTime aTime = _parseTimestamp(a["timestamp"]);
+                DateTime bTime = _parseTimestamp(b["timestamp"]);
+                return bTime.compareTo(aTime);
+              });
+            }
+          });
+          
+          print("📢 New announcement received: ${jsonData["message"]}");
+        }
+        
+      } catch (e) {
+        print("JSON Parsing Error: $e | Raw Data: $jsonString");
+      }
+    }
+  }
+
+  void _handleConnectionError() {
+    _isConnecting = false;
+    
+    // Cancel existing subscription
+    _streamSubscription?.cancel();
+    _streamSubscription = null;
+    
+    // Cancel existing timer
+    _reconnectTimer?.cancel();
+    
+    if (_reconnectAttempts < _maxReconnectAttempts) {
+      _reconnectAttempts++;
+      int delay = _reconnectDelay * _reconnectAttempts; // Progressive delay
+      
+      print("🔄 Reconnecting in $delay seconds... (${_reconnectAttempts}/$_maxReconnectAttempts)");
+      
+      _reconnectTimer = Timer(Duration(seconds: delay), () {
+        if (mounted) {
+          _listenToAdminPosts();
+        }
+      });
+    } else {
+      print("❌ Max reconnection attempts reached");
+      setState(() {
+        isLoading = false;
+      });
+      
+      // Show user-friendly error message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Connection lost. Pull down to refresh.'),
+          backgroundColor: Colors.orange,
+          action: SnackBarAction(
+            label: 'Retry',
+            onPressed: () {
+              _reconnectAttempts = 0;
+              _listenToAdminPosts();
+            },
+          ),
+        ),
+      );
     }
   }
 
   void _disconnectEventSource() {
     try {
-      if (_eventSource != null) {
-        _eventSource?.client.close();
-        _eventSource = null;
-      }
+      _reconnectTimer?.cancel();
+      _streamSubscription?.cancel();
+      _streamSubscription = null;
+      _isConnecting = false;
+      _reconnectAttempts = 0;
+      print("🔌 SSE connection disconnected");
     } catch (e) {
-      print("Error disconnecting EventSource: $e");
+      print("Error disconnecting SSE: $e");
     }
   }
 
@@ -214,6 +326,7 @@ class _AdminPostPageState extends State<AdminPostPage> with TickerProviderStateM
 
     try {
       _disconnectEventSource();
+      _reconnectAttempts = 0; // Reset retry count on manual refresh
       await Future.delayed(Duration(milliseconds: 500));
       await _listenToAdminPosts();
     } catch (e) {
@@ -356,8 +469,6 @@ class _AdminPostPageState extends State<AdminPostPage> with TickerProviderStateM
       );
     }
   }
-
-
 
   @override
   Widget build(BuildContext context) {
